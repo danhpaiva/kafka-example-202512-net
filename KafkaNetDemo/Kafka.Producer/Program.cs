@@ -7,38 +7,40 @@ var config = new ProducerConfig
 {
     BootstrapServers = "localhost:9092",
     ClientId = Dns.GetHostName(),
-    // Configurações de Resiliência
-    Acks = Acks.All,                // Garante que todos os brokers confirmem o recebimento
-    EnableIdempotence = true,        // Evita duplicatas se houver retry de rede
-    MessageTimeoutMs = 5000
+    // Tenta reconectar automaticamente por até 5 minutos se o broker cair
+    MessageTimeoutMs = 5000,
+    RequestTimeoutMs = 5000
 };
 
+// <string, string> sendo Chave e Valor. Usar chaves ajuda no particionamento.
 using var producer = new ProducerBuilder<string, string>(config).Build();
 
-Console.WriteLine("--- Producer JSON de Alta Disponibilidade ---");
+Console.WriteLine("--- Producer de Alta Disponibilidade ---");
 
 while (true)
 {
     Console.WriteLine("\nDigite o nome do produto (ou 'sair'):");
     var produto = Console.ReadLine();
-    if (string.IsNullOrWhiteSpace(produto) || produto.ToLower() == "sair") break;
+    if (produto?.ToLower() == "sair") break;
 
-    var order = new Order(new Random().Next(100, 999), produto, 99.90m, DateTime.Now);
+    var order = new Order(new Random().Next(100, 999), produto!, 99.90m, DateTime.Now);
     var json = JsonSerializer.Serialize(order);
 
     try
     {
-        var result = await producer.ProduceAsync("vendas-pedidos", new Message<string, string>
+        // ProduceAsync garante que não travamos a thread principal
+        var deliveryReport = await producer.ProduceAsync("vendas-pedidos", new Message<string, string>
         {
             Key = order.Id.ToString(),
             Value = json
         });
 
-        Console.WriteLine($"Enviado: Partição {result.Partition} | Offset {result.Offset}");
+        Console.WriteLine($"Entregue: Partição {deliveryReport.Partition}, Offset {deliveryReport.Offset}");
     }
     catch (ProduceException<string, string> e)
     {
-        Console.WriteLine($"Erro de Conexão/Kafka: {e.Error.Reason}");
+        // Se o Kafka estiver fora, ele cairá aqui após o timeout
+        Console.WriteLine($"Erro de Envio: {e.Error.Reason}");
     }
     catch (Exception ex)
     {
