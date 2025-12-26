@@ -1,3 +1,9 @@
 ﻿namespace Kafka.Producer.Models;
 
-public record Order(int Id, string Product, decimal Price, DateTime CreatedAt);
+public class Order
+{
+    public int Id { get; set; }
+    public string Product { get; set; }
+    public double Price { get; set; }
+    public long CreatedAt { get; set; }
+}
