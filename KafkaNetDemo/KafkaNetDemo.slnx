@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="Kafka.Consumer/Kafka.Consumer.csproj" />
   <Project Path="Kafka.Producer/Kafka.Producer.csproj" />
+  <Project Path="Kafka.Worker/Kafka.Worker.csproj" Id="e7739efb-2aac-48a2-b3e9-075982d8b617" />
 </Solution>
