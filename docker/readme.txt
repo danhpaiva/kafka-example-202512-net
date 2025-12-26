@@ -10,3 +10,8 @@ docker compose up -d
 Apos subir os servicos, acessar o Web:
 
 http://localhost:8080/
+
+Para dar um restar:
+
+docker compose down
+docker compose up -d
