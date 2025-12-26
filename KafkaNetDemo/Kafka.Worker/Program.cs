@@ -1,4 +1,4 @@
-using Kafka.Worker;
+using Kafka.Worker.Workers;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddHostedService<KafkaWorker>();

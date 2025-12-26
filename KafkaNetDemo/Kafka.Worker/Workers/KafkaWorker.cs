@@ -1,6 +1,6 @@
 ﻿using Confluent.Kafka;
 
-namespace Kafka.Worker
+namespace Kafka.Worker.Workers
 {
     public class KafkaWorker : BackgroundService
     {
