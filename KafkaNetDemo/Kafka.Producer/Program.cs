@@ -1,35 +1,21 @@
 ﻿using Confluent.Kafka;
-using Confluent.SchemaRegistry;
-using Confluent.SchemaRegistry.Serdes;
 using Kafka.Producer.Models;
 using System.Net;
+using System.Text.Json;
 
-// 1. Configurações de Conexão
-var bootstrapServers = "localhost:9092";
-var schemaRegistryUrl = "localhost:8081";
-
-var producerConfig = new ProducerConfig
+var config = new ProducerConfig
 {
-    BootstrapServers = bootstrapServers,
+    BootstrapServers = "localhost:9092",
     ClientId = Dns.GetHostName(),
-    MessageTimeoutMs = 5000,
-    RequestTimeoutMs = 5000
+    // Configurações de Resiliência
+    Acks = Acks.All,                // Garante que todos os brokers confirmem o recebimento
+    EnableIdempotence = true,        // Evita duplicatas se houver retry de rede
+    MessageTimeoutMs = 5000
 };
 
-var schemaRegistryConfig = new SchemaRegistryConfig
-{
-    Url = schemaRegistryUrl
-};
+using var producer = new ProducerBuilder<string, string>(config).Build();
 
-// 2. Construção dos Clientes
-// O CachedSchemaRegistryClient armazena os esquemas localmente para não consultar o servidor toda hora
-using var schemaRegistry = new CachedSchemaRegistryClient(schemaRegistryConfig);
-
-using var producer = new ProducerBuilder<string, Order>(producerConfig)
-    .SetValueSerializer(new AvroSerializer<Order>(schemaRegistry)) // Serializador Avro injetado aqui
-    .Build();
-
-Console.WriteLine("--- Producer Avro com Schema Registry ---");
+Console.WriteLine("--- Producer JSON de Alta Disponibilidade ---");
 
 while (true)
 {
@@ -37,31 +23,22 @@ while (true)
     var produto = Console.ReadLine();
     if (string.IsNullOrWhiteSpace(produto) || produto.ToLower() == "sair") break;
 
-    // Criando o objeto respeitando o contrato Avro
-    var order = new Order
-    {
-        Id = new Random().Next(100, 999),
-        Product = produto,
-        Price = 99.90,
-        CreatedAtTicks = DateTime.UtcNow.Ticks
-    };
+    var order = new Order(new Random().Next(100, 999), produto, 99.90m, DateTime.Now);
+    var json = JsonSerializer.Serialize(order);
 
     try
     {
-        // Envio Assíncrono para o tópico Avro
-        // O AvroSerializer verificará se o esquema da classe 'Order' já existe no Registry
-        var deliveryReport = await producer.ProduceAsync("vendas-pedidos-avro", new Message<string, Order>
+        var result = await producer.ProduceAsync("vendas-pedidos", new Message<string, string>
         {
             Key = order.Id.ToString(),
-            Value = order
+            Value = json
         });
 
-        Console.WriteLine($"[Avro] Sucesso! Partição: {deliveryReport.Partition} | Offset: {deliveryReport.Offset}");
+        Console.WriteLine($"Enviado: Partição {result.Partition} | Offset {result.Offset}");
     }
-    catch (ProduceException<string, Order> e)
+    catch (ProduceException<string, string> e)
     {
-        // Erro específico do Kafka ou falha na validação do esquema (Contrato violado)
-        Console.WriteLine($"Erro de Envio/Esquema: {e.Error.Reason}");
+        Console.WriteLine($"Erro de Conexão/Kafka: {e.Error.Reason}");
     }
     catch (Exception ex)
     {
