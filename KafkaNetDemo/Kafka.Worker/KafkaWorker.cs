@@ -1,6 +1,4 @@
 ﻿using Confluent.Kafka;
-using Kafka.Worker.Models;
-using System.Text.Json;
 
 namespace Kafka.Worker
 {
@@ -9,62 +7,92 @@ namespace Kafka.Worker
         private readonly ILogger<KafkaWorker> _logger;
         private readonly IConfiguration _configuration;
         private readonly IConsumer<string, string> _consumer;
-        private readonly string _topic;
+        private readonly IProducer<string, string> _producer;
+        private readonly string _mainTopic;
+        private readonly string _dlqTopic;
 
         public KafkaWorker(ILogger<KafkaWorker> logger, IConfiguration configuration)
         {
             _logger = logger;
             _configuration = configuration;
 
-            var config = new ConsumerConfig
+            var bootstrap = _configuration["KafkaConfig:BootstrapServers"];
+
+            var consumerConfig = new ConsumerConfig
             {
-                BootstrapServers = _configuration["KafkaConfig:BootstrapServers"],
+                BootstrapServers = bootstrap,
                 GroupId = _configuration["KafkaConfig:GroupId"],
-                AutoOffsetReset = (AutoOffsetReset)Enum.Parse(typeof(AutoOffsetReset), _configuration["KafkaConfig:AutoOffsetReset"]!)
+                AutoOffsetReset = AutoOffsetReset.Earliest,
+                EnableAutoCommit = false //Controlamos o commit manualmente
             };
 
-            _consumer = new ConsumerBuilder<string, string>(config).Build();
-            _topic = _configuration["KafkaConfig:Topic"]!;
+            var producerConfig = new ProducerConfig { BootstrapServers = bootstrap };
+
+            _consumer = new ConsumerBuilder<string, string>(consumerConfig).Build();
+            _producer = new ProducerBuilder<string, string>(producerConfig).Build();
+
+            _mainTopic = _configuration["KafkaConfig:Topic"]!;
+            _dlqTopic = _configuration["KafkaConfig:DLQTopic"]!;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _consumer.Subscribe(_topic);
-            _logger.LogInformation("Worker Kafka subscrito no tópico: {topic}", _topic);
+            _consumer.Subscribe(_mainTopic);
 
-            // O loop agora respeita o stoppingToken do .NET (quando o serviço para)
             while (!stoppingToken.IsCancellationRequested)
             {
+                ConsumeResult<string, string>? result = null;
                 try
                 {
-                    // Consume é bloqueante, mas passamos o token para cancelar se o app fechar
-                    var result = _consumer.Consume(stoppingToken);
+                    result = _consumer.Consume(stoppingToken);
+                    if (result == null) continue;
 
-                    if (result != null)
-                    {
-                        var order = JsonSerializer.Deserialize<Order>(result.Message.Value);
-                        _logger.LogInformation("Processando Pedido: {id} | {item}", order?.Id, order?.Product);
+                    // LÓGICA DE NEGÓCIO (Simulação de erro)
+                    ProcessOrder(result.Message.Value);
 
-                        // Simula processamento pesado
-                        await Task.Delay(500, stoppingToken);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    break; // Fechamento normal
+                    // Se chegou aqui, deu certo. Fazemos o Commit.
+                    _consumer.Commit(result);
+                    _logger.LogInformation("Mensagem processada e commitada: {offset}", result.Offset);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Erro ao processar mensagem do Kafka.");
-                    await Task.Delay(2000, stoppingToken); // Backoff em caso de erro
+                    _logger.LogError($"Falha crítica. Movendo para DLQ: {ex.Message}");
+
+                    if (result != null)
+                    {
+                        await MoveToDeadLetterQueue(result);
+                        _consumer.Commit(result); // Commitamos na principal para não ler de novo
+                    }
                 }
             }
+        }
+
+        private void ProcessOrder(string json)
+        {
+            // Simulação: Se o produto for "erro", forçamos uma exceção
+            if (json.Contains("erro"))
+                throw new Exception("Simulação de falha no processamento!");
+
+            _logger.LogInformation("Processando: {json}", json);
+        }
+
+        private async Task MoveToDeadLetterQueue(ConsumeResult<string, string> result)
+        {
+            var dlqMessage = new Message<string, string>
+            {
+                Key = result.Message.Key,
+                Value = result.Message.Value,
+                Headers = new Headers { { "Error", System.Text.Encoding.UTF8.GetBytes("Falha no processamento") } }
+            };
+
+            await _producer.ProduceAsync(_dlqTopic, dlqMessage);
+            _logger.LogWarning("Mensagem enviada para a DLQ: {topic}", _dlqTopic);
         }
 
         public override void Dispose()
         {
             _consumer.Close();
-            _consumer.Dispose();
+            _producer.Dispose();
             base.Dispose();
         }
     }
